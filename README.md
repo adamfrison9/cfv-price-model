@@ -6,3 +6,13 @@ Card and pricing data sourced from [TCGCSV](https://tcgcsv.com/).
 
 ## AI-Generated Code
 Portions of this project's code were generated with the assistance of AI tools.
+
+## How to Use
+- Place any TCGCSV data you would like to train on into card_data/sets/ (this model is currently designed for use with D-Standard cards only).
+- Then, run *csv_handler.py*, which will combine all the card sets into a file named *compiled_data.csv*.
+- Then, run *train.py* which will train the model on your chosen data. As of now, the hyperparameters can only be changed by hand on line 9 of *train.py*.
+- Now you can run inference using *infer.py* to guess the price of any potential card with an existing nation and rarity.
+
+*infer.py* example:
+
+python infer.py --nation "Dark States" --rarity R --grade 1 --shield 5000 --critical 1 --power 8000 --text "During your turn, if you have a grade 3 or greater vanguard, this unit gets [Power]+5000."

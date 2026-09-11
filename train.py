@@ -152,4 +152,3 @@ if __name__ == "__main__":
     }
     torch.save(checkpoint, out_dir / "full_model.pt")
     torch.save(encoders, out_dir / "full_encoders.pt")
-    tokenizer.save_pretrained(out_dir / "tokenizer")
