@@ -6,7 +6,7 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 class CardDataset(Dataset):
     def __init__(self, dataframe, feature_columns, target_column, text_column="extDescription",
-                 scaler=None, encoders=None, tokenizer=None, max_length=128):
+                 scaler=None, encoders=None, tokenizer=None, max_length=192):
         df = dataframe.copy()
 
         # Encode string columns to integers

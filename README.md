@@ -15,4 +15,4 @@ Portions of this project's code were generated with the assistance of AI tools.
 
 *infer.py* example:
 
-python infer.py --nation "Dark States" --rarity R --grade 1 --shield 5000 --critical 1 --power 8000 --text "During your turn, if you have a grade 3 or greater vanguard, this unit gets [Power]+5000."
+python infer.py --nation "Dark States" --rarity R --grade 1 --shield 5000 --critical 1 --power 8000 --text "Placeholder Card Name: During your turn, if you have a grade 3 or greater vanguard, this unit gets [Power]+5000."

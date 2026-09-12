@@ -11,7 +11,10 @@ def train(csv_path, feature_cols, epochs_stage1=20, epochs_stage2=30, batch_size
     df = pd.read_csv(csv_path)
     string_cols = df.select_dtypes(include=["object", "str"]).columns
     df[string_cols] = df[string_cols].apply(lambda col: col.str.strip())
-    df = df[feature_cols + ["extDescription", "midPrice"]].dropna()
+    df = df[feature_cols + ["cleanName", "extDescription", "midPrice"]].dropna()
+
+    # Prepend the card title so it survives truncation of long effect text
+    df["extDescription"] = df["cleanName"] + ": " + df["extDescription"]
 
     # Log-transform the target
     df["midPrice"] = df["midPrice"].clip(lower=0.01)
@@ -112,7 +115,7 @@ def train(csv_path, feature_cols, epochs_stage1=20, epochs_stage2=30, batch_size
 
 # ── Inference ──────────────────────────────────────────────────────────────────
 
-def predict(model, scaler, encoders, tokenizer, feature_cols, sample: dict, effect_text: str, max_length=128) -> float:
+def predict(model, scaler, encoders, tokenizer, feature_cols, sample: dict, effect_text: str, max_length=192) -> float:
     df = pd.DataFrame([sample])
     for col, enc in encoders.items():
         df[col] = enc.transform(df[col].astype(str))
