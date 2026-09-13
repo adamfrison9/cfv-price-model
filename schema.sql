@@ -1,0 +1,14 @@
+CREATE TABLE IF NOT EXISTS runs (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS metrics (
+    id SERIAL PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    step INTEGER NOT NULL,
+    metric_name TEXT NOT NULL,
+    value DOUBLE PRECISION NOT NULL,
+    logged_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

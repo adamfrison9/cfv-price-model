@@ -54,23 +54,24 @@ class CardDataset(Dataset):
         )
 
 class CardPriceModel(nn.Module):
-    def __init__(self, num_features):
+    def __init__(self, num_features, hidden_size=128, dropout=0.2):
         super().__init__()
 
         # Text branch
         self.text_encoder = AutoModel.from_pretrained("distilbert-base-uncased")
 
         # Numeric branch
+        num_emb_size = hidden_size // 2
         self.num_encoder = nn.Sequential(
-            nn.Linear(num_features, 128), nn.BatchNorm1d(128), nn.ReLU(),
-            nn.Linear(128, 64), nn.ReLU(),
+            nn.Linear(num_features, hidden_size), nn.BatchNorm1d(hidden_size), nn.ReLU(),
+            nn.Linear(hidden_size, num_emb_size), nn.ReLU(),
         )
 
         # Fusion head
         self.fusion = nn.Sequential(
-            nn.Linear(768 + 64, 128), nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 1)
+            nn.Linear(768 + num_emb_size, hidden_size), nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size, 1)
         )
 
     def forward(self, numeric_feats, input_ids, attention_mask):

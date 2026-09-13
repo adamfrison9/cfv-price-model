@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 venv/
 models/
+.env
+*.env
+.DS_Store

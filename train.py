@@ -1,4 +1,7 @@
+import os
+import time
 import pandas as pd
+import psycopg2
 import torch
 import torch.nn as nn
 from model import CardDataset, CardPriceModel
@@ -6,7 +9,33 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
 
-def train(csv_path, feature_cols, epochs_stage1=20, epochs_stage2=30, batch_size=32, val_split=0.2):
+
+def connect_with_retry(database_url, retries=5, delay=2):
+    for attempt in range(1, retries + 1):
+        try:
+            return psycopg2.connect(database_url)
+        except psycopg2.OperationalError as e:
+            if attempt == retries:
+                raise
+            print(f"WARNING: DB connection attempt {attempt}/{retries} failed: {e}")
+            time.sleep(delay * attempt)
+
+def train(csv_path, feature_cols, epochs_stage1=20, epochs_stage2=30, batch_size=32, val_split=0.2,
+          learning_rate=1e-3, hidden_size=128, dropout=0.2, conn=None, run_id=None):
+    def log_metric(step, metric_name, value):
+        if not conn:
+            return
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO metrics (run_id, step, metric_name, value) VALUES (%s, %s, %s, %s)",
+                    (run_id, step, metric_name, value)
+                )
+            conn.commit()
+        except Exception as e:
+            print(f"WARNING: failed to log metric {metric_name}={value} at step {step}: {e}")
+            conn.rollback()
+
     # Load data, dropping rows with missing values
     df = pd.read_csv(csv_path)
     string_cols = df.select_dtypes(include=["object", "str"]).columns
@@ -38,7 +67,7 @@ def train(csv_path, feature_cols, epochs_stage1=20, epochs_stage2=30, batch_size
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, drop_last=True)
     val_loader   = DataLoader(val_set,   batch_size=batch_size)
 
-    model   = CardPriceModel(num_features=len(feature_cols))
+    model   = CardPriceModel(num_features=len(feature_cols), hidden_size=hidden_size, dropout=dropout)
     loss_fn = nn.HuberLoss()
 
     # ── Stage 1: Frozen DistilBERT ─────────────────────────────────────────────
@@ -47,8 +76,8 @@ def train(csv_path, feature_cols, epochs_stage1=20, epochs_stage2=30, batch_size
         param.requires_grad = False
 
     optimizer = torch.optim.Adam([
-        {"params": model.num_encoder.parameters(), "lr": 1e-3},
-        {"params": model.fusion.parameters(),      "lr": 1e-3},
+        {"params": model.num_encoder.parameters(), "lr": learning_rate},
+        {"params": model.fusion.parameters(),      "lr": learning_rate},
     ])
 
     for epoch in range(epochs_stage1):
@@ -69,11 +98,15 @@ def train(csv_path, feature_cols, epochs_stage1=20, epochs_stage2=30, batch_size
                 preds    = model(numeric_feats, input_ids, attention_mask)
                 val_loss += loss_fn(preds, targets).item()
 
+        avg_train_loss = train_loss / len(train_loader)
+        avg_val_loss   = val_loss / len(val_loader)
         print(
             f"[S1] Epoch {epoch+1:>3}/{epochs_stage1} | "
-            f"Train Loss: {train_loss/len(train_loader):.4f} | "
-            f"Val Loss: {val_loss/len(val_loader):.4f}"
+            f"Train Loss: {avg_train_loss:.4f} | "
+            f"Val Loss: {avg_val_loss:.4f}"
         )
+        log_metric(epoch, "stage1_train_loss", avg_train_loss)
+        log_metric(epoch, "stage1_val_loss", avg_val_loss)
 
     # ── Stage 2: Full fine-tune ────────────────────────────────────────────────
     print("\nStage 2: Fine-tuning all layers...")
@@ -81,9 +114,9 @@ def train(csv_path, feature_cols, epochs_stage1=20, epochs_stage2=30, batch_size
         param.requires_grad = True
 
     optimizer = torch.optim.Adam([
-        {"params": model.text_encoder.parameters(), "lr": 1e-5},
-        {"params": model.num_encoder.parameters(), "lr": 1e-3},
-        {"params": model.fusion.parameters(),      "lr": 1e-3},
+        {"params": model.text_encoder.parameters(), "lr": learning_rate * 0.01},
+        {"params": model.num_encoder.parameters(), "lr": learning_rate},
+        {"params": model.fusion.parameters(),      "lr": learning_rate},
     ])
 
     for epoch in range(epochs_stage2):
@@ -104,11 +137,15 @@ def train(csv_path, feature_cols, epochs_stage1=20, epochs_stage2=30, batch_size
                 preds    = model(numeric_feats, input_ids, attention_mask)
                 val_loss += loss_fn(preds, targets).item()
 
+        avg_train_loss = train_loss / len(train_loader)
+        avg_val_loss   = val_loss / len(val_loader)
         print(
             f"[S2] Epoch {epoch+1:>3}/{epochs_stage2} | "
-            f"Train Loss: {train_loss/len(train_loader):.4f} | "
-            f"Val Loss: {val_loss/len(val_loader):.4f}"
+            f"Train Loss: {avg_train_loss:.4f} | "
+            f"Val Loss: {avg_val_loss:.4f}"
         )
+        log_metric(epoch, "stage2_train_loss", avg_train_loss)
+        log_metric(epoch, "stage2_val_loss", avg_val_loss)
 
     return model, train_set.scaler, train_set.encoders, train_set.tokenizer
 
@@ -142,16 +179,55 @@ if __name__ == "__main__":
         "extCritical", "extPower",
     ]
 
-    model, scaler, encoders, tokenizer = train("card_data/compiled_data.csv", feature_cols)
+    epochs_stage1 = int(os.environ.get("EPOCHS_STAGE1", 20))
+    epochs_stage2 = int(os.environ.get("EPOCHS_STAGE2", 30))
+    learning_rate = float(os.environ.get("LEARNING_RATE", 1e-3))
+    batch_size    = int(os.environ.get("BATCH_SIZE", 32))
+    hidden_size   = int(os.environ.get("HIDDEN_SIZE", 128))
+    dropout       = float(os.environ.get("DROPOUT", 0.2))
 
-    out_dir = Path("models") / "full"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    run_id = os.environ.get("RUN_ID")
+    database_url = os.environ.get("DATABASE_URL")
 
-    # Save model, scaler, and encoders
-    checkpoint = {
-        "model_state_dict": model.state_dict(),
-        "scaler_mean": torch.tensor(scaler.mean_),
-        "scaler_scale": torch.tensor(scaler.scale_),
-    }
-    torch.save(checkpoint, out_dir / "full_model.pt")
-    torch.save(encoders, out_dir / "full_encoders.pt")
+    if bool(database_url) != bool(run_id):
+        raise RuntimeError("DATABASE_URL and RUN_ID must both be set together, or both left unset")
+
+    conn = connect_with_retry(database_url) if database_url else None
+    status = ""
+
+    if conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE runs SET status = %s WHERE id = %s", ("running", run_id))
+        conn.commit()
+
+    try:
+        model, scaler, encoders, tokenizer = train(
+            "card_data/compiled_data.csv", feature_cols,
+            epochs_stage1=epochs_stage1, epochs_stage2=epochs_stage2,
+            batch_size=batch_size, learning_rate=learning_rate,
+            hidden_size=hidden_size, dropout=dropout,
+            conn=conn, run_id=run_id,
+        )
+
+        out_dir = Path("models") / "full"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save model, scaler, and encoders
+        checkpoint = {
+            "model_state_dict": model.state_dict(),
+            "scaler_mean": torch.tensor(scaler.mean_),
+            "scaler_scale": torch.tensor(scaler.scale_),
+        }
+        torch.save(checkpoint, out_dir / "full_model.pt")
+        torch.save(encoders, out_dir / "full_encoders.pt")
+
+        status = "completed"
+    except Exception:
+        status = "failed"
+        raise
+    finally:
+        if conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE runs SET status = %s WHERE id = %s", (status, run_id))
+            conn.commit()
+            conn.close()
